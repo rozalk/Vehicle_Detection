@@ -1,14 +1,15 @@
 import os
 import numpy as np
+import cv2  # Import OpenCV
 from sklearn import svm
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.applications import VGG16
 from tensorflow.keras.preprocessing.image import img_to_array, load_img
 from tensorflow.keras.applications.vgg16 import preprocess_input
-from PIL import Image  # Add this import statement
+from PIL import Image
 
 # Define the path to the dataset
-data_dir = '../code/Vehicle-Detection/dataset'
+data_dir = '../Vehicle_Detection/dataset'
 
 # Load the VGG16 model (CNN) for feature extraction
 model = VGG16(weights='imagenet', include_top=False, pooling='avg')
@@ -50,7 +51,7 @@ def load_dataset(data_dir):
         for img_file in os.listdir(label_dir):
             if not is_image_file(img_file):
                 continue
-                
+
             img_path = os.path.join(label_dir, img_file)
             try:
                 # Attempt to open the image to check if it's valid
@@ -98,6 +99,12 @@ svm_classifier = svm.SVC(kernel='linear', C=1.0)
 svm_classifier.fit(X_train, y_train)
 
 # Function to perform vehicle detection on a single image
+def sliding_window(image, step_size, window_size):
+    # Implement the sliding window function
+    for y in range(0, image.shape[0] - window_size[1], step_size):
+        for x in range(0, image.shape[1] - window_size[0], step_size):
+            yield (x, y, image[y:y + window_size[1], x:x + window_size[0]])
+
 def detect_vehicles(image_path, model, svm_classifier, window_size=(224, 224), step_size=32):
     if not os.path.exists(image_path):
         print(f"Error: Image file {image_path} does not exist.")
@@ -113,6 +120,7 @@ def detect_vehicles(image_path, model, svm_classifier, window_size=(224, 224), s
     # Iterate over the sliding windows
     for (x, y, window) in sliding_window(image, step_size, window_size):
         if window.shape[0] != window_size[1] or window.shape[1] != window_size[0]:
+            print(f"Skipping window at ({x}, {y}) due to shape mismatch: {window.shape}")
             continue
 
         img_array = cv2.resize(window, window_size)
@@ -122,9 +130,11 @@ def detect_vehicles(image_path, model, svm_classifier, window_size=(224, 224), s
 
         # Extract features using VGG16
         features = model.predict(img_array).flatten()
+        print(f"Extracted features shape: {features.shape}")
 
         # Predict using SVM
         prediction = svm_classifier.predict([features])[0]
+        print(f"Prediction: {prediction}")
 
         # Label based on prediction
         label = 'Four-Wheeler' if prediction == 1 else 'Two-Wheeler'
@@ -142,7 +152,7 @@ def detect_vehicles(image_path, model, svm_classifier, window_size=(224, 224), s
     return vehicle_count
 
 # Test the model on the single image
-image_path = '../code/Vehicle-Detection/15.jpg'
+image_path = '../Vehicle_Detection/dataset/two_wheelers/1030.jpg'
 vehicle_count = detect_vehicles(image_path, model, svm_classifier)
 print(f"Results for {image_path}:")
 print(f"Two-Wheelers detected: {vehicle_count['Two-Wheeler']}")
