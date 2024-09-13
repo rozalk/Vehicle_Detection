@@ -1,16 +1,12 @@
 import os
+import cv2
 import numpy as np
-import cv2  # Import OpenCV
 from sklearn import svm
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.applications import VGG16
 from tensorflow.keras.preprocessing.image import img_to_array, load_img
 from tensorflow.keras.applications.vgg16 import preprocess_input
-from PIL import Image
-
-# Define the path to the dataset
-data_dir ='d:/project/minor project/project/Vehicle_Detection/dataset'
-
+from collections import defaultdict
 
 # Load the VGG16 model (CNN) for feature extraction
 model = VGG16(weights='imagenet', include_top=False, pooling='avg')
@@ -19,142 +15,164 @@ model = VGG16(weights='imagenet', include_top=False, pooling='avg')
 def is_image_file(filename):
     return filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif'))
 
-# Function to extract features from images
+# Function to extract features from images using VGG16
 def extract_features(image_path):
     try:
-        img = load_img(image_path, target_size=(224, 224))
+        img = load_img(image_path, target_size=(224, 224))  # Resize image to 224x224
         img_array = img_to_array(img)
         img_array = np.expand_dims(img_array, axis=0)
-        img_array = preprocess_input(img_array)
+        img_array = preprocess_input(img_array)  # Preprocess image for VGG16
         features = model.predict(img_array)
-        return features.flatten()
+        return features.flatten()  # Flatten the feature array
     except Exception as e:
         print(f"Error loading image {image_path}: {e}")
         return None
 
-# Function to load dataset
+# Function to load dataset with multiple vehicle types
 def load_dataset(data_dir):
     features = []
     labels = []
     print("Loading dataset from:", data_dir)
-    
-    if not os.path.exists(data_dir):
-        print(f"Dataset directory does not exist: {data_dir}")
-        return np.array(features), np.array(labels)
 
-    for label in os.listdir(data_dir):
+    for label in os.listdir(data_dir):  # Loop through folders (vehicle types)
         label_dir = os.path.join(data_dir, label)
         if not os.path.isdir(label_dir):
-            continue
+            continue  # Skip if it's not a directory
 
-        print(f"Processing directory: {label_dir}")
-        
-        for img_file in os.listdir(label_dir):
+        for img_file in os.listdir(label_dir):  # Loop through files in each folder
             if not is_image_file(img_file):
-                continue
+                continue  # Skip non-image files
 
             img_path = os.path.join(label_dir, img_file)
-            try:
-                # Attempt to open the image to check if it's valid
-                with Image.open(img_path) as img:
-                    img.verify()  # Verify the image file
-            except (IOError, SyntaxError) as e:
-                print(f"Skipping invalid image file {img_path}: {e}")
-                continue
-
             print(f"Processing image: {img_path}")
             feature = extract_features(img_path)
-            if feature is not None:
+            if feature is not None:  # Only append valid features
                 features.append(feature)
-                labels.append(label)
+                labels.append(label)  # Use folder name as label (e.g., "car", "truck")
 
     return np.array(features), np.array(labels)
 
-# Load the dataset
-X, y = load_dataset(data_dir)
-
-if len(X) == 0 or len(y) == 0:
-    print("Error: No data loaded. Check your dataset path and contents.")
-    exit(1)
-
-# Convert labels to binary (0 for two_wheelers, 1 for four_wheelers)
-label_mapping = {'two_wheelers': 0, 'four_wheelers': 1}
-y = np.array([label_mapping.get(label, -1) for label in y])
-
-# Check if dataset contains multiple classes
-unique_labels = np.unique(y)
-if len(unique_labels) <= 1:
-    raise ValueError("Dataset does not contain multiple classes. Please ensure your dataset is properly labeled and contains more than one class.")
-else:
-    print("Dataset contains multiple classes:", unique_labels)
-
-# Split the dataset into training and testing sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# Check if training data contains multiple classes
-if len(np.unique(y_train)) <= 1:
-    raise ValueError("Training data does not contain multiple classes. Please check your data split.")
-
-# Train the SVM classifier
-svm_classifier = svm.SVC(kernel='linear', C=1.0)
-svm_classifier.fit(X_train, y_train)
-
-# Function to perform vehicle detection on a single image
+# Sliding window function to slide across the image
 def sliding_window(image, step_size, window_size):
-    # Implement the sliding window function
     for y in range(0, image.shape[0] - window_size[1], step_size):
         for x in range(0, image.shape[1] - window_size[0], step_size):
             yield (x, y, image[y:y + window_size[1], x:x + window_size[0]])
 
-def detect_vehicles(image_path, model, svm_classifier, window_size=(224, 224), step_size=32):
-    if not os.path.exists(image_path):
-        print(f"Error: Image file {image_path} does not exist.")
-        return {'Two-Wheeler': 0, 'Four-Wheeler': 0}
+# Non-Maximum Suppression (NMS) with IoU
+def non_max_suppression_with_iou(boxes, overlap_threshold=0.4):
+    if len(boxes) == 0:
+        return []
 
+    picked_boxes = []
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+    sorted_indices = np.argsort(y2)
+
+    while len(sorted_indices) > 0:
+        last = len(sorted_indices) - 1
+        i = sorted_indices[last]
+        picked_boxes.append(i)
+        xx1 = np.maximum(x1[i], x1[sorted_indices[:-1]])
+        yy1 = np.maximum(y1[i], y1[sorted_indices[:-1]])
+        xx2 = np.minimum(x2[i], x2[sorted_indices[:-1]])
+        yy2 = np.minimum(y2[i], y2[sorted_indices[:-1]])
+
+        w = np.maximum(0, xx2 - xx1 + 1)
+        h = np.maximum(0, yy2 - yy1 + 1)
+
+        overlap = (w * h) / areas[sorted_indices[:-1]]
+
+        sorted_indices = np.delete(sorted_indices, np.concatenate(([last], np.where(overlap > overlap_threshold)[0])))
+
+    return picked_boxes
+
+# Vehicle detection with confidence threshold and NMS
+def detect_vehicles(image_path, model, svm_classifier, step_size=128, scale_factors=[1.0, 1.5], confidence_threshold=0.6):
     image = cv2.imread(image_path)
     if image is None:
         print(f"Error: Could not load image {image_path}")
-        return {'Two-Wheeler': 0, 'Four-Wheeler': 0}
+        return None
 
-    vehicle_count = {'Two-Wheeler': 0, 'Four-Wheeler': 0}
+    original_image = image.copy()
+    vehicle_count = defaultdict(int)
+    boxes = []
+    confidence_scores = []
 
-    # Iterate over the sliding windows
-    for (x, y, window) in sliding_window(image, step_size, window_size):
-        if window.shape[0] != window_size[1] or window.shape[1] != window_size[0]:
-            print(f"Skipping window at ({x}, {y}) due to shape mismatch: {window.shape}")
-            continue
+    for scale in scale_factors:
+        resized_image = cv2.resize(image, (int(image.shape[1] * scale), int(image.shape[0] * scale)))
+        for (x, y, window) in sliding_window(resized_image, step_size, (224, 224)):
+            if window.shape[0] != 224 or window.shape[1] != 224:
+                continue
 
-        img_array = cv2.resize(window, window_size)
-        img_array = img_to_array(img_array)
-        img_array = np.expand_dims(img_array, axis=0)
-        img_array = preprocess_input(img_array)
+            img_array = cv2.resize(window, (224, 224))
+            img_array = img_to_array(img_array)
+            img_array = np.expand_dims(img_array, axis=0)
+            img_array = preprocess_input(img_array)
 
-        # Extract features using VGG16
-        features = model.predict(img_array).flatten()
-        print(f"Extracted features shape: {features.shape}")
+            features = model.predict(img_array).flatten()
 
-        # Predict using SVM
-        prediction = svm_classifier.predict([features])[0]
-        print(f"Prediction: {prediction}")
+            # Predict the type of vehicle using the SVM classifier
+            prediction = svm_classifier.predict([features])[0]
+            confidence = svm_classifier.decision_function([features])[0]
+            
+            # Only accept predictions with a high confidence
+            if confidence > confidence_threshold:
+                print(f"Predicted label: {prediction} with confidence: {confidence}")
+                boxes.append([int(x / scale), int(y / scale), int((x + 224) / scale), int((y + 224) / scale)])
+                confidence_scores.append(confidence)
 
-        # Label based on prediction
-        label = 'Four-Wheeler' if prediction == 1 else 'Two-Wheeler'
-        vehicle_count[label] += 1
+                vehicle_count[prediction] += 1
+                # Draw bounding box and label
+                cv2.rectangle(original_image, (int(x / scale), int(y / scale)), (int((x + 224) / scale), int((y + 224) / scale)), (0, 255, 0), 2)
+                cv2.putText(original_image, prediction, (int(x / scale), int(y / scale) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
 
-        # Draw bounding box on detected vehicles
-        color = (0, 255, 0) if prediction == 1 else (0, 0, 255)
-        cv2.rectangle(image, (x, y), (x + window_size[0], y + window_size[1]), color, 2)
-        cv2.putText(image, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    # Convert boxes to NumPy array for NMS
+    boxes = np.array(boxes)
+    if len(boxes) > 0:
+        picked_boxes = non_max_suppression_with_iou(boxes)
 
-    # Save the detection output
-    output_path = 'output_detection.jpg'
-    cv2.imwrite(output_path, image)
-    print(f"Total vehicles detected: Two-Wheelers: {vehicle_count['Two-Wheeler']}, Four-Wheelers: {vehicle_count['Four-Wheeler']}")
-    return vehicle_count
+        # Draw only the picked boxes after NMS
+        for i in picked_boxes:
+            box = boxes[i]
+            cv2.rectangle(original_image, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 2)
 
-# Test the model on the single image
-image_path = 'd:/project/minor project/project/Vehicle_Detection/download.jpg'
-vehicle_count = detect_vehicles(image_path, model, svm_classifier)
-print(f"Results for {image_path}:")
-print(f"Two-Wheelers detected: {vehicle_count['Two-Wheeler']}")
-print(f"Four-Wheelers detected: {vehicle_count['Four-Wheeler']}")
+    # Save the image with detected vehicles
+    output_image_path = "detected_vehicles_output.jpg"
+    cv2.imwrite(output_image_path, original_image)
+
+    # Print the count of each vehicle type detected
+    for vehicle_type, count in vehicle_count.items():
+        print(f"Detected {vehicle_type}: {count}")
+
+    return vehicle_count, output_image_path
+
+if __name__ == "__main__":  # Corrected this line to fix the main execution block
+    # Load the dataset
+    data_dir = 'd:/project/minor project/project/Vehicle_Detection/dataset'  # Update with your correct dataset path
+    X, y = load_dataset(data_dir)
+
+    # Split the dataset into training and testing sets
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # Train the SVM classifier
+    svm_classifier = svm.SVC(kernel='linear', C=1.0, probability=True)  # Enable probability for confidence
+    svm_classifier.fit(X_train, y_train)
+
+    # Set the path to the image you want to test
+    image_path = 'd:/project/minor project/project/Vehicle_Detection/'  # Example real-time photo path
+
+    # Print the absolute image path to verify it's correct
+    print("Absolute image path:", os.path.abspath(image_path))
+
+    # Detect vehicles in a new image with adjusted confidence threshold
+    detected_vehicles, output_image = detect_vehicles(image_path, model, svm_classifier, confidence_threshold=0.4)
+
+    # Check if the detection was successful
+    if detected_vehicles is not None and output_image is not None:
+        print(f"Number of vehicles detected: {detected_vehicles}")
+        print(f"Processed image saved to: {output_image}")
+    else:
+        print("Vehicle detection failed due to image loading error.")
