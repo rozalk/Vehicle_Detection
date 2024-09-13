@@ -9,7 +9,8 @@ from tensorflow.keras.applications.vgg16 import preprocess_input
 from PIL import Image
 
 # Define the path to the dataset
-data_dir = '../Vehicle_Detection/dataset'
+data_dir ='d:/project/minor project/project/Vehicle_Detection/dataset'
+
 
 # Load the VGG16 model (CNN) for feature extraction
 model = VGG16(weights='imagenet', include_top=False, pooling='avg')
@@ -152,7 +153,7 @@ def detect_vehicles(image_path, model, svm_classifier, window_size=(224, 224), s
     return vehicle_count
 
 # Test the model on the single image
-image_path = '../Vehicle_Detection/dataset/two_wheelers/1030.jpg'
+image_path = 'd:/project/minor project/project/Vehicle_Detection/download.jpg'
 vehicle_count = detect_vehicles(image_path, model, svm_classifier)
 print(f"Results for {image_path}:")
 print(f"Two-Wheelers detected: {vehicle_count['Two-Wheeler']}")
